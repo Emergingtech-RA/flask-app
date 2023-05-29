@@ -104,7 +104,7 @@ jobs:
         with:
           app-name: 'demo-flask'
           slot-name: 'stg'
-          publish-profile: ${{ secrets.AzureAppService_PublishProfile_8f6bc13dd5154eb69639e46e463189a9 }}.
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_C070BB4AA0904993B5D9EFD7C5FAE14C }}.
 
   zap_scan_DAST:
     runs-on: ubuntu-latest
