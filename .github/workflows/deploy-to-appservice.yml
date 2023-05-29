@@ -1,0 +1,162 @@
+name: "End to End DevSecOps"
+on:
+  push:
+    branches: [ "development" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  security:
+    name: SCA & SAST
+    runs-on: ${{ matrix.language == 'swift' && 'macos-latest' || 'ubuntu-latest' }}
+    permissions:
+      actions: write
+      contents: write
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python' ]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v2
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:${{ matrix.language }}"
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@master
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: .
+          args: >
+            -Dsonar.organization=emergingtech-ra-org
+            -Dsonar.projectKey=flask-app-demo
+  
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v2
+      - name: Set up Python version
+        uses: actions/setup-python@v1
+        with:
+          python-version: '3.8'
+
+      - name: Create and start virtual environment
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+      
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Set Environment Variable
+        run: export FLASK_APP=run.py
+
+        
+      # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
+      
+      - name: Upload artifact for deployment jobs
+        uses: actions/upload-artifact@v2
+        with:
+          name: python-app
+          path: |
+            . 
+            !venv/
+          
+            
+  deploy-to-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: 'stg'
+      url: 'https://demo-flask-stg.azurewebsites.net/'
+
+    steps:
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+            creds: ${{secrets.AZURE_CREDENTIALS}} 
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v2
+        with:
+          name: python-app
+          path: .
+
+      - name: Deploy to Azure Web App (Staging)
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: 'demo-flask'
+          slot-name: 'stg'
+          publish-profile: ${{ secrets.AzureAppService_PublishProfile_8f6bc13dd5154eb69639e46e463189a9 }}.
+
+  zap_scan_DAST:
+    runs-on: ubuntu-latest
+    needs: deploy-to-staging
+    name: DAST
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          ref: main
+      - name: ZAP Scan
+        uses: zaproxy/action-baseline@v0.7.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          docker_name: 'owasp/zap2docker-stable'
+          target: 'https://demo-flask-stg.azurewebsites.net/'
+          cmd_options: '-a'
+  
+  assess-policy-compliance:    
+      runs-on: ubuntu-latest
+      needs: zap_scan_DAST
+      steps:
+      # Azure Login       
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{secrets.AZURE_CREDENTIALS}} 
+
+      - name: Check for resource compliance
+        uses: azure/policy-compliance-scan@v0
+        with:
+          scopes: |
+            /subscriptions/${{secrets.AZURE_SUBSCRIPTION}}/resourceGroups/demo-app/providers/Microsoft.Web/sites/demo-flask
+
+  deploy-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [zap_scan_DAST, deploy-to-staging]
+    environment:
+      name: 'prod'
+      url: 'https://demo-flask.azurewebsites.net/'
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v2
+        with:
+          name: python-app
+          path: .
+
+      - name: Deploy to Azure Web App (Production)
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: 'demo-flask'
+          slot-name: Production  # Deploying to the production slot
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_C3743E714E3F4AEC8359E0340D01FA38 }}
+          package: .
