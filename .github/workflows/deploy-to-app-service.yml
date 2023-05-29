@@ -64,6 +64,9 @@ jobs:
       
       - name: Install dependencies
         run: pip install -r requirements.txt
+      - name: Set Environment Variable
+        run: export FLASK_APP=run.py
+
         
       # Optional: Add step to run tests here (PyTest, Django test suites, etc.)
       
